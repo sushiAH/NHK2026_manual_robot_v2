@@ -21,6 +21,7 @@ import sys
 target_dir = os.path.abspath("/home/aratahorie/ah_python_libraries")
 sys.path.append(target_dir)
 from recv_feedback import *
+from ah_python_ether import *
 
 
 def calc_delta_odometry(x_vel, y_vel, theta, ang_z_vel, dt):
@@ -53,10 +54,9 @@ class FeedbackPublisher(Node):
 
         # recv_feedbackの割り込み設定
         self.recv_feedback_timer = self.create_timer(0.005, self.recv_feedback)
-        self.publish_timer = self.create_timer(0.005, self.publish_feedback)
 
-        # esp32 serialの設定
-        self.ser = serial.Serial(port="/dev/ttyACM0", baudrate=115200)
+        # initialize ether
+        self.sock = init_udp()
 
         # メンバ変数初期化
         self.mcu_timestamp_millis = 0
@@ -79,23 +79,27 @@ class FeedbackPublisher(Node):
         self.last_time = self.get_clock().now()
 
     def recv_feedback(self):
-        struct_format = "<BIfffffffffB"
-        packet = receive_packet(struct_format, self.ser)
+        struct_format = "<BIfffffffff"
+        packet = udp_receive(struct_format, self.sock)
 
-        if packet != None:
-            self.mcu_timestamp_millis = packet[1]
+        if packet is None:
+            return
 
-            self.q_w = packet[2]
-            self.q_x = packet[3]
-            self.q_y = packet[4]
-            self.q_z = packet[5]
+        self.mcu_timestamp_millis = packet[1]
 
-            self.ang_x_vel = packet[6]
-            self.ang_y_vel = packet[7]
-            self.ang_z_vel = packet[8]
+        self.q_w = packet[2]
+        self.q_x = packet[3]
+        self.q_y = packet[4]
+        self.q_z = packet[5]
 
-            self.enc_x_vel = packet[9]
-            self.enc_y_vel = packet[10]
+        self.ang_x_vel = packet[6]
+        self.ang_y_vel = packet[7]
+        self.ang_z_vel = packet[8]
+
+        self.enc_x_vel = packet[9]
+        self.enc_y_vel = packet[10]
+
+        self.publish_feedback()
 
     def publish_feedback(self):
         current_time = self.get_clock().now()
@@ -206,7 +210,7 @@ class FeedbackPublisher(Node):
             1e-3,  # yaw角速度の信頼度
         ]
 
-        self.odom_pub.publish(odom)
+        #self.odom_pub.publish(odom)
 
         # imuの配信
         imu = Imu()

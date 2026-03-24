@@ -19,8 +19,8 @@ def rot(vec, theta):
     cos, sin = np.cos(theta), np.sin(theta)
 
     R = np.array([
-        [cos, -sin],
-        [sin, cos],
+        [cos, sin],
+        [-sin, cos],
     ])
 
     return R @ vec
@@ -33,12 +33,6 @@ def calc_p_value(target, current, p_gain):
 
 
 class TwistPublisher(Node):
-    """subscribe joystick and publish twist message
-
-    Attributes:
-        subscription_joy: instance of subscribe
-        twist_publisher:  instance of publish
-    """
 
     def __init__(self):
         super().__init__("twist_publisher")
@@ -69,6 +63,7 @@ class TwistPublisher(Node):
 
         twist = Twist()
 
+        #スティックの補正
         if abs(axes_values[1]) < 0.1:
             axes_values[1] = 0
         if abs(axes_values[0]) < 0.1:
@@ -76,12 +71,13 @@ class TwistPublisher(Node):
         if abs(axes_values[2]) < 0.1:
             axes_values[2] = 0
 
+        #座標変換
         v = np.array([-axes_values[0] * 2, -axes_values[1] * 2])
         Rv = rot(v, self.yaw_rad)
+
         twist.linear.y = float(Rv[0])
         twist.linear.x = float(Rv[1])
         twist.angular.z = -axes_values[2]
-
         self.twist_publisher.publish(twist)
 
     def imu_callback(self, msg):
@@ -95,10 +91,10 @@ class TwistPublisher(Node):
 def main():
     rclpy.init()  # rclpyライブラリの初期化
 
-    twist_publisher_node = TwistPublisher()
+    joy2twist_node = TwistPublisher()
 
-    rclpy.spin(twist_publisher_node)  # ノードをスピンさせる
-    twist_publisher_node.destroy_node()  # ノードを停止する
+    rclpy.spin(joy2twist_node)  # ノードをスピンさせる
+    joy2twist_node.destroy_node()  # ノードを停止する
     rclpy.shutdown()
 
 
