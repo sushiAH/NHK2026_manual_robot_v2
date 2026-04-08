@@ -7,42 +7,33 @@
 ダイナミクセル2つでボックスを回収する 2パターン
 
 """
-
-from rclpy.node import Node
 import rclpy
-from std_msgs.msg import String
-import math
-import numpy as np
-import atexit
+from rclpy.node import Node
+from rclpy.callback_groups import ReentrantCallbackGroup
+from rclpy.executors import MultiThreadedExecutor
 from sensor_msgs.msg import Joy
-
-#自作ライブラリ
+import time
+import threading
 import os
 import sys
+import atexit
 
+# 自作ライブラリ
 target_dir = os.path.abspath("/home/aratahorie/ah_python_libraries")
 sys.path.append(target_dir)
 from ah_python_can import *
 from dyna_interfaces.msg import DynaFeedback, DynaTarget
 
-bus = can.interface.Bus(bustype="socketcan",
-                        channel="can0",
-                        asynchronous=True,
-                        bitrate=1000000)
 
-
+# ステータス更新関数（既存のまま）
 def update_state(now_button_state, last_button_state, state_counter,
                  state_length):
-    "ステータス更新関数"
     if now_button_state == 1 and last_button_state == 0:
         state_counter += 1
-
     elif now_button_state == -1 and last_button_state == 0:
-        state_counter += -1
-
+        state_counter -= 1
     state_counter = (state_counter + state_length) % state_length
     last_button_state = now_button_state
-
     return state_counter, last_button_state
 
 
@@ -51,40 +42,56 @@ class BoxArmController(Node):
     def __init__(self):
         super().__init__("box_arm_controller")
 
-        self.subscription_joy = self.create_subscription(
-            Joy,  # メッセージの型
-            "/joy",  # 購読するトピック名
-            self.joy_callback,  # 呼び出すコールバック関数
-            10,
-        )  # キューサイズ(溜まっていく)
-        self.subscription_joy
+        # --- 並列実行のための設定 ---
+        self.group = ReentrantCallbackGroup()
+        self.lock = threading.Lock()  # データの整合性用
 
-        # publisherの設定
-        self.dyna_pos_publisher = self.create_publisher(DynaTarget,
-                                                        "/dyna_target_pos", 10)
-
-        self.now_button_state = [0, 0, 0, 0, 0]  #[昇降、直動、ハンド、ボックス保持、機体把持]
+        # 既存の変数（そのまま）
+        self.now_button_state = [0, 0, 0, 0, 0]
         self.last_button_state = [0, 0, 0, 0, 0]
-
         self.now_state_counter = [0, 0, 0, 0, 0]
         self.last_state_counter = [0, 0, 0, 0, 0]
 
-        self.timer = self.create_timer(0.01, self.timer_callback)
+        # 二重実行（スレッド爆発）防止フラグ
+        self.is_working = [False] * 5
 
-        #dc立ち上げ
-        #昇降
+        # 購読設定（callback_groupを追加）
+        self.subscription_joy = self.create_subscription(
+            Joy, "/joy", self.joy_callback, 10, callback_group=self.group)
+
+        # パブリッシャー
+        self.dyna_pos_publisher = self.create_publisher(DynaTarget,
+                                                        "/dyna_target_pos", 10)
+
+        # --- タイマーを分割 ---
+        self.create_timer(0.01,
+                          self.status_monitor_callback,
+                          callback_group=self.group)
+        self.create_timer(0.1,
+                          self.lift_timer_callback,
+                          callback_group=self.group)
+        self.create_timer(0.1,
+                          self.extend_timer_callback,
+                          callback_group=self.group)
+        self.create_timer(0.1,
+                          self.hand_timer_callback,
+                          callback_group=self.group)
+        self.create_timer(0.1,
+                          self.box_timer_callback,
+                          callback_group=self.group)
+        self.create_timer(0.1,
+                          self.grip_timer_callback,
+                          callback_group=self.group)
+
+        # 初期化処理（既存のまま）
         set_potentio_pos_mode()
         set_potentio_pos_mode()
         set_potentio_pos_mode()
         set_potentio_pos_mode()
-        #直動
         set_potentio_pos_mode()
         set_potentio_pos_mode()
-        #機体保持エアシリ
         set_air_mode()
         set_air_mode()
-
-        #pidゲイン設定
         set_pos_pid_gain()
         set_pos_pid_gain()
         set_pos_pid_gain()
@@ -92,133 +99,165 @@ class BoxArmController(Node):
         set_pos_pid_gain()
         set_pos_pid_gain()
 
-    def publish_dyna_pos(self, id, target):
+    def publish_dyna_pos(self, id=0, target=0):
         msg = DynaTarget()
         msg.id = id
         msg.target = target
         self.dyna_pos_publisher.publish(msg)
 
     def joy_callback(self, msg):
-        """joyを受取、各機構を動作
+        with self.lock:
+            self.now_button_state[0] = msg.axes[7]
+            self.now_button_state[1] = msg.axes[5]
+            self.now_button_state[2] = msg.buttons[5]
+            self.now_button_state[3] = msg.buttons[4]
+            self.now_button_state[4] = msg.axes[6]
 
-        Args:
-            msg (Joy): joy_stick_message
-        """
+    def status_monitor_callback(self):
+        """カウンターの更新（ロック内で一括処理）"""
+        with self.lock:
+            self.now_state_counter[0], self.last_button_state[0] = update_state(
+                self.now_button_state[0], self.last_button_state[0],
+                self.now_state_counter[0], 4)
+            self.now_state_counter[1], self.last_button_state[1] = update_state(
+                self.now_button_state[1], self.last_button_state[1],
+                self.now_state_counter[1], 3)
+            self.now_state_counter[2], self.last_button_state[2] = update_state(
+                self.now_button_state[2], self.last_button_state[2],
+                self.now_state_counter[2], 2)
+            self.now_state_counter[3], self.last_button_state[3] = update_state(
+                self.now_button_state[3], self.last_button_state[3],
+                self.now_state_counter[3], 2)
+            self.now_state_counter[4], self.last_button_state[4] = update_state(
+                self.now_button_state[4], self.last_button_state[4],
+                self.now_state_counter[4], 2)
 
-        #受取部分
-        self.now_button_state[0] = msg.axes[7]  #昇降: 十字上下
-        self.now_button_state[1] = msg.axes[5]  #直動: R2
-        self.now_button_state[2] = msg.buttons[5]  #ハンド: R1
-        self.now_button_state[3] = msg.buttons[4]  #回転: L1
-        self.now_button_state[4] = msg.axes[6]  #機体把持L2
+    def lift_timer_callback(self):
+        with self.lock:
+            if self.is_working[0]:
+                return
+            state = self.now_state_counter[0]
 
-    def timer_callback(self):
-
-        #ステータス更新
-        #昇降
-        self.now_state_counter[0], self.last_button_state[0] = update_state(
-            self.now_button_state[0], self.last_button_state[0],
-            self.now_state_counter[0], 4)
-
-        #直動
-        self.now_state_counter[1], self.last_button_state[1] = update_state(
-            self.now_button_state[1], self.last_button_state[1],
-            self.now_state_counter[1], 3)
-
-        #ハンド
-        self.now_state_counter[2], self.last_button_state[2] = update_state(
-            self.now_button_state[2], self.last_button_state[2],
-            self.now_state_counter[2], 2)
-
-        #ボックス保持
-        self.now_state_counter[3], self.last_button_state[3] = update_state(
-            self.now_button_state[3], self.last_button_state[3],
-            self.now_state_counter[3], 2)
-
-        #機体把持
-        self.now_state_counter[4], self.last_button_state[4] = update_state(
-            self.now_button_state[4], self.last_button_state[4],
-            self.now_state_counter[4], 2)
-
-        #動作部分
-        #ハンド
-        if (self.now_state_counter[2] == 0 and self.last_state_counter[2] == 0):
+        self.is_working[0] = True
+        if state == 0:
             set_goal_pos()
             set_goal_pos()
-            self.last_state_counter[2] = 1
-
-        elif (self.now_state_counter[2] == 1 and
-              self.last_state_counter[2] == 1):
             set_goal_pos()
             set_goal_pos()
-            self.last_state_counter[2] = 0
+        elif state == 1:
+            set_goal_pos()
+            set_goal_pos()
+            set_goal_pos()
+            set_goal_pos()
+        elif state == 2:
+            set_goal_pos()
+            set_goal_pos()
+            set_goal_pos()
+            set_goal_pos()
+        elif state == 3:
+            set_goal_pos()
+            set_goal_pos()
+            set_goal_pos()
+            set_goal_pos()
+        self.is_working[0] = False
 
-        #ボックス保持
-        if (self.now_state_counter[3] == 0 and self.last_state_counter[3] == 0):
+    def extend_timer_callback(self):
+        with self.lock:
+            if self.is_working[1]:
+                return
+            state = self.now_state_counter[1]
+
+        self.is_working[1] = True
+        if state == 0:
+            set_goal_pos()
+            set_goal_pos()
+        elif state == 1:
+            set_goal_pos()
+            set_goal_pos()
+        elif state == 2:
+            set_goal_pos()
+            set_goal_pos()
+        self.is_working[1] = False
+
+    def hand_timer_callback(self):
+        with self.lock:
+            if self.is_working[2]:
+                return
+            state = self.now_state_counter[2]
+            last_state = self.last_state_counter[2]
+
+        if state == 0 and last_state == 0:
+            self.is_working[2] = True
+            set_goal_pos()
+            set_goal_pos()
+            with self.lock:
+                self.last_state_counter[2] = 1
+            self.is_working[2] = False
+        elif state == 1 and last_state == 1:
+            self.is_working[2] = True
+            set_goal_pos()
+            set_goal_pos()
+            with self.lock:
+                self.last_state_counter[2] = 0
+            self.is_working[2] = False
+
+    def box_timer_callback(self):
+        with self.lock:
+            if self.is_working[3]:
+                return
+            state = self.now_state_counter[3]
+            last_state = self.last_state_counter[3]
+
+        if state == 0 and last_state == 0:
+            self.is_working[3] = True
             self.publish_dyna_pos()
             self.publish_dyna_pos()
-            self.last_state_counter[3] = 1
-
-        elif (self.now_state_counter[3] == 1 and
-              self.last_state_counter[3] == 1):
+            with self.lock:
+                self.last_state_counter[3] = 1
+            self.is_working[3] = False
+        elif state == 1 and last_state == 1:
+            self.is_working[3] = True
             self.publish_dyna_pos()
             self.publish_dyna_pos()
-            self.last_state_counter[3] = 0
+            with self.lock:
+                self.last_state_counter[3] = 0
+            self.is_working[3] = False
 
-        #機体把持
-        if (self.now_state_counter[4] == 0 and self.last_state_counter[4] == 0):
+    def grip_timer_callback(self):
+        with self.lock:
+            if self.is_working[4]:
+                return
+            state = self.now_state_counter[4]
+            last_state = self.last_state_counter[4]
+
+        if state == 0 and last_state == 0:
+            self.is_working[4] = True
             set_air()
             set_air()
-            self.last_state_counter[4] = 1
-
-        elif (self.now_state_counter[4] == 1 and
-              self.last_state_counter[4] == 1):
+            with self.lock:
+                self.last_state_counter[4] = 1
+            self.is_working[4] = False
+        elif state == 1 and last_state == 1:
+            self.is_working[4] = True
             set_air()
             set_air()
-            self.last_state_counter[4] = 0
-
-        #昇降
-        if (self.now_state_counter[0] == 0):
-            set_goal_pos()
-            set_goal_pos()
-            set_goal_pos()
-            set_goal_pos()
-        elif (self.now_state_counter[0] == 1):
-            set_goal_pos()
-            set_goal_pos()
-            set_goal_pos()
-            set_goal_pos()
-        elif (self.now_state_counter[0] == 2):
-            set_goal_pos()
-            set_goal_pos()
-            set_goal_pos()
-            set_goal_pos()
-        elif (self.now_state_counter[0] == 3):
-            set_goal_pos()
-            set_goal_pos()
-            set_goal_pos()
-            set_goal_pos()
-
-        #直動
-        if (self.now_state_counter[1] == 0):
-            set_goal_pos()
-            set_goal_pos()
-        elif (self.now_state_counter[1] == 1):
-            set_goal_pos()
-            set_goal_pos()
-        elif (self.now_state_counter[1] == 2):
-            set_goal_pos()
-            set_goal_pos()
+            with self.lock:
+                self.last_state_counter[4] = 0
+            self.is_working[4] = False
 
 
 def main():
-    rclpy.init()  # rclpyライブラリの初期化
-
+    rclpy.init()
     box_arm_controller_node = BoxArmController()
-
-    rclpy.spin(box_arm_controller_node)  # ノードをスピンさせる
-    box_arm_controller_node.destroy_node()  # ノードを停止する
-    rclpy.shutdown()
+    executor = MultiThreadedExecutor()
+    executor.add_node(box_arm_controller_node)
+    try:
+        executor.spin()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        box_arm_controller_node.destroy_node()
+        rclpy.shutdown()
 
 
 def stop():
