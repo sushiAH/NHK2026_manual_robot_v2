@@ -72,12 +72,14 @@ class TwistPublisher(Node):
             axes_values[2] = 0
 
         #座標変換
-        v = np.array([-axes_values[0] * 2, -axes_values[1] * 2])
-        Rv = rot(v, self.yaw_rad)
+        # v = np.array([axes_values[1], axes_values[0] ])
+        # Rv = rot(v, self.yaw_rad)
+        #twist.linear.y = float(Rv[0])
+        #twist.linear.x = float(Rv[1])
 
-        twist.linear.y = float(Rv[0])
-        twist.linear.x = float(Rv[1])
-        twist.angular.z = -axes_values[2]
+        twist.linear.x = axes_values[1]
+        twist.linear.y = axes_values[0]
+        twist.angular.z = axes_values[2]
         self.twist_publisher.publish(twist)
 
     def imu_callback(self, msg):

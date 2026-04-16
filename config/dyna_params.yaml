@@ -1,0 +1,15 @@
+dyna_handler_node:
+  ros__parameters:
+    port_name: "/dev/ttyUSB-Dynamixel"
+    motor_ids: [0,1,2,3,4]
+    motors:
+      id0:
+        operating_mode: 3
+      id1:
+        operating_mode: 3
+      id2:
+        operating_mode: 3
+      id3:
+        operating_mode: 3
+      id4:
+        operating_mode: 3

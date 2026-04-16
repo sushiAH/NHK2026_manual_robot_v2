@@ -1,4 +1,10 @@
-"""twistをsubscribeして、足回りesp32にモーター指令値を送信する"""
+"""twistをsubscribeして、足回りesp32にモーター指令値を送信する
+id 1 右下 正回転
+id 2 左下 逆回転
+id 3 右上 正回転
+id 4 左上 逆回転
+
+タイヤ直径100[mm]"""
 
 import rclpy
 from rclpy.node import Node
@@ -21,10 +27,10 @@ from ah_python_can import *
 
 
 def from_twist_to_motor_vel(vx, vy, w, L, fy):
-    V_1 = (-vx + vy + 2 * math.sqrt(2) * w * L) / (4 * math.pi * fy)
-    V_2 = (+vx + vy + 2 * math.sqrt(2) * w * L) / (4 * math.pi * fy)
-    V_3 = (-vx + vy + 2 * math.sqrt(2) * -w * L) / (4 * math.pi * fy)
-    V_4 = (-vx - vy + 2 * math.sqrt(2) * w * L) / (4 * math.pi * fy)
+    V_1 = (vx - vy + 2 * math.sqrt(2) * w * L) / (4 * math.pi * fy)
+    V_2 = (-vx - vy + 2 * math.sqrt(2) * w * L) / (4 * math.pi * fy)
+    V_3 = (vx + vy + 2 * math.sqrt(2) * w * L) / (4 * math.pi * fy)
+    V_4 = (-vx + vy + 2 * math.sqrt(2) * w * L) / (4 * math.pi * fy)
 
     return (V_1, V_2, V_3, V_4)
 
@@ -41,25 +47,15 @@ class TwistSubscriber(Node):
         super().__init__("TwistSubscriber")
 
         # can立ち上げ
-        send_packet_1byte(0x010, 0, 3, bus)
-        send_packet_1byte(0x011, 0, 3, bus)
-        send_packet_1byte(0x012, 0, 3, bus)
-        send_packet_1byte(0x013, 0, 3, bus)
+        set_enc_vel_mode(0x020, bus)
+        set_enc_vel_mode(0x021, bus)
+        set_enc_vel_mode(0x022, bus)
+        set_enc_vel_mode(0x023, bus)
 
-        send_packet_4byte(0x010, 9, 50, bus)
-        send_packet_4byte(0x011, 9, 50, bus)
-        send_packet_4byte(0x012, 9, 50, bus)
-        send_packet_4byte(0x013, 9, 50, bus)
-
-        send_packet_4byte(0x010, 10, 5000, bus)  # set pos_p_gain
-        send_packet_4byte(0x011, 10, 5000, bus)  # set pos_p_gain
-        send_packet_4byte(0x012, 10, 5000, bus)  # set pos_p_gain
-        send_packet_4byte(0x013, 10, 5000, bus)  # set pos_p_gain
-
-        send_packet_4byte(0x010, 11, 0, bus)  # set pos_p_gain
-        send_packet_4byte(0x011, 11, 0, bus)  # set pos_p_gain
-        send_packet_4byte(0x012, 11, 0, bus)  # set pos_p_gain
-        send_packet_4byte(0x013, 11, 0, bus)  # set pos_p_gain
+        #set_vel_pid_gain(0x020,0,0,0,bus)
+        #set_vel_pid_gain(0x021,0,0,0,bus)
+        #set_vel_pid_gain(0x022,0,0,0,bus)
+        #set_vel_pid_gain(0x023,0,0,0,bus)
 
         self.subscription_twist_joy = self.create_subscription(
             Twist,  # メッセージの型
@@ -71,9 +67,11 @@ class TwistSubscriber(Node):
 
         # --- Config ---
         # 車体横の長さ
-        self.L = 0.3
+        self.L = 0.8  #[m]
         # 車体中心からタイヤまでの距離
-        self.fy = 0.127
+        self.fy = 0.55
+        self.wheel_r = 0.05  #[mm]
+        self.twist_gain = 2 * math.pi * self.wheel_r
 
         # メンバーの初期化
         self.joy_linear_x = 0
@@ -102,10 +100,10 @@ class TwistSubscriber(Node):
 
         V_1, V_2, V_3, V_4 = from_twist_to_motor_vel(vx, vy, w, self.L, self.fy)
 
-        send_packet_4byte(0x010, 2, V_1, bus)  # set_goal_pos
-        send_packet_4byte(0x011, 2, V_2, bus)  # set_goal_pos
-        send_packet_4byte(0x012, 2, V_3, bus)  # set_goal_pos
-        send_packet_4byte(0x013, 2, V_4, bus)  # set_goal_pos
+        set_goal_vel(0x020, float(V_1 / self.twist_gain), bus)
+        set_goal_vel(0x021, float(V_2 / self.twist_gain), bus)
+        set_goal_vel(0x022, float(V_3 / self.twist_gain), bus)
+        set_goal_vel(0x023, float(V_4 / self.twist_gain), bus)
 
 
 def main():
@@ -119,10 +117,10 @@ def main():
 
 
 def stop():
-    send_packet_1byte(0x010, 0, 0, bus)
-    send_packet_1byte(0x011, 0, 0, bus)
-    send_packet_1byte(0x012, 0, 0, bus)
-    send_packet_1byte(0x013, 0, 0, bus)
+    send_packet_1byte(0x020, 0, 0, bus)
+    send_packet_1byte(0x021, 0, 0, bus)
+    send_packet_1byte(0x022, 0, 0, bus)
+    send_packet_1byte(0x023, 0, 0, bus)
 
 
 atexit.register(stop)

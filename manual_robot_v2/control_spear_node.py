@@ -1,5 +1,5 @@
-import rclpy
 from rclpy.node import Node
+import rclpy
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from sensor_msgs.msg import Joy
@@ -47,7 +47,7 @@ class SpearController(Node):
         self.now_button_state = [0]
         self.last_button_state = [0]
         self.now_state_counter = [0]
-        self.last_state_counter = [-1]  # 最初は必ず実行されるように -1 で初期化
+        self.last_state_counter = [0]
 
         # 二重実行防止フラグ
         self.is_working = [False]
@@ -69,7 +69,7 @@ class SpearController(Node):
                           callback_group=self.group)
 
         # 初期設定（既存のまま）
-        send_packet_1byte(0x021, 0, 5, bus)  # set_operating
+        set_air_mode(0x050, bus)
         self.get_logger().info("Spear Controller Initialized")
 
     def publish_dyna_pos(self, id, target):
@@ -81,7 +81,6 @@ class SpearController(Node):
     def joy_callback(self, msg):
         """Joy入力をロックして保存"""
         with self.lock:
-            # msg.buttons[0] を監視
             self.now_button_state[0] = msg.buttons[0]
 
     def status_monitor_callback(self):
@@ -109,27 +108,27 @@ class SpearController(Node):
 
             # --- 既存の move_spear ロジックをそのまま配置 ---
             if state == 0:
-                self.publish_dyna_pos(0, 3100)  # 横
-                self.publish_dyna_pos(1, 3300)  # 閉じる
-                self.publish_dyna_pos(2, 2800)  # 閉じる
-                send_packet_1byte(0x021, 12, 0, bus)  # air 閉じる
+                self.publish_dyna_pos(2, 3100)  # 横
+                self.publish_dyna_pos(3, 3300)  # 閉じる
+                self.publish_dyna_pos(4, 2800)  # 閉じる
+                set_air(0x050, 0, bus)
 
             elif state == 1:
-                self.publish_dyna_pos(0, 2100)  # 縦
-                self.publish_dyna_pos(1, 3300)  # 開く
-                self.publish_dyna_pos(2, 2800)  # 開く
-                send_packet_1byte(0x021, 12, 1, bus)  # air 開く
+                self.publish_dyna_pos(2, 2100)  # 縦
+                self.publish_dyna_pos(3, 3300)  # 開く
+                self.publish_dyna_pos(4, 2800)  # 開く
+                set_air(0x050, 1, bus)
 
             elif state == 2:
-                self.publish_dyna_pos(1, 3000)  # ハンド閉じる
-                self.publish_dyna_pos(2, 3200)  # ハンド閉じる
-                send_packet_1byte(0x021, 12, 0, bus)  # air 閉じる
+                self.publish_dyna_pos(3, 3000)  # ハンド閉じる
+                self.publish_dyna_pos(4, 3200)  # ハンド閉じる
+                set_air(0x050, 0, bus)
 
             elif state == 3:
-                self.publish_dyna_pos(0, 3100)  # 横
+                self.publish_dyna_pos(2, 3100)  # 横
 
             elif state == 4:
-                self.publish_dyna_pos(0, 3100)  # 縦
+                self.publish_dyna_pos(2, 3100)  # 縦
 
             # ---------------------------------------------
 
